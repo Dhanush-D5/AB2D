@@ -1,5 +1,5 @@
 // FetchContactsScreen.tsx
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react"; // 1. Import useCallback
 import {
   FlatList,
   StyleSheet,
@@ -8,13 +8,15 @@ import {
   TouchableOpacity,
   View,
   Alert,
-  Platform,
   KeyboardAvoidingView,
+  Platform,
+  AppState, // 2. Import AppState
 } from "react-native";
 import Contacts, { Contact } from "react-native-contacts";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation } from "@react-navigation/native"; // We don't need useIsFocused anymore
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 
+// ... (RootStackParamList and other types remain the same) ...
 export type RootStackParamList = {
   FetchContacts: undefined;
   ImageTransmissionScreen: {
@@ -30,9 +32,7 @@ type FetchContactsNavProp = NativeStackNavigationProp<
 >;
 
 const ALPHABETS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-
-const cleanNumber = (num: string) =>
-  num.replace(/[^0-9+]/g, ""); // only digits and +
+const cleanNumber = (num: string) => num.replace(/[^0-9+]/g, "");
 
 export default function FetchContactsScreen() {
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -40,44 +40,65 @@ export default function FetchContactsScreen() {
   const flatListRef = useRef<FlatList<Contact>>(null);
   const navigation = useNavigation<FetchContactsNavProp>();
 
-  useEffect(() => {
-    const loadContacts = async () => {
-      try {
-        if (Platform.OS === "android") {
-          const permission = await Contacts.checkPermission();
-          if (permission === "undefined") {
-            const granted = await Contacts.requestPermission();
-            if (granted !== "authorized") {
-              Alert.alert(
-                "Permission Denied",
-                "Cannot access contacts. Please enable it from Settings."
-              );
-              return;
-            }
-          } else if (permission !== "authorized") {
-            Alert.alert(
-              "Permission Denied",
-              "Cannot access contacts. Please enable it from Settings."
-            );
-            return;
-          }
-        }
+  // 3. Wrap your contact-loading logic in useCallback
+  // This ensures the function is stable and doesn't trigger unnecessary re-renders
+  const loadContacts = useCallback(async () => {
+    try {
+      let permission = await Contacts.checkPermission();
 
+      // If we don't have permission, request it.
+      if (permission !== "authorized") {
+        permission = await Contacts.requestPermission();
+      }
+
+      // After requesting, check the permission *again*
+      if (permission === "authorized") {
         const contactsList = await Contacts.getAll();
         contactsList.sort((a, b) =>
           (a.displayName ?? "").localeCompare(b.displayName ?? "", undefined, {
             sensitivity: "base",
           })
         );
-        setContacts(contactsList);
-      } catch (err) {
-        console.error("Contacts fetch failed:", err);
-        Alert.alert("Error", "Failed to fetch contacts.");
+        // Only update state if contacts are actually found
+        // This prevents an empty list from flashing if permission was just granted
+        if (contactsList.length > 0) {
+          setContacts(contactsList);
+        }
+      } else {
+        // If permission is still not authorized (e.g., user denied)
+        Alert.alert(
+          "Permission Denied",
+          "Cannot access contacts. Please enable it from Settings."
+        );
       }
-    };
+    } catch (err) {
+      console.error("Contacts fetch failed:", err);
+      Alert.alert("Error", "Failed to fetch contacts.");
+    }
+  }, []); // Empty dependency array means this function is created once
 
+  // 4. This useEffect now handles both initial load AND re-focusing the app
+  useEffect(() => {
+    // Run it once on mount
     loadContacts();
-  }, []);
+
+    // Add an event listener for AppState changes
+    const subscription = AppState.addEventListener("change", (nextAppState) => {
+      // If the app is coming back to the 'active' state (foreground)
+      if (nextAppState === "active") {
+        // Run the loadContacts function again.
+        // This will re-check permission and load contacts if just granted.
+        loadContacts();
+      }
+    });
+
+    // Cleanup: remove the listener when the component unmounts
+    return () => {
+      subscription.remove();
+    };
+  }, [loadContacts]); // The effect depends on our stable loadContacts function
+
+  // ... (The rest of your component logic remains exactly the same) ...
 
   const filteredContacts = contacts.filter((c) =>
     c.displayName?.toLowerCase().includes(searchQuery.toLowerCase())
@@ -106,7 +127,10 @@ export default function FetchContactsScreen() {
       )
     );
     if (numbers.length === 0) {
-      Alert.alert("No number", "This contact does not have a valid phone number.");
+      Alert.alert(
+        "No number",
+        "This contact does not have a valid phone number."
+      );
       return;
     }
     navigation.navigate("ImageTransmissionScreen", {
@@ -161,7 +185,10 @@ export default function FetchContactsScreen() {
                   ))
                 ) : (
                   <Text
-                    style={[styles.phone, { fontStyle: "italic", color: "#888" }]}
+                    style={[
+                      styles.phone,
+                      { fontStyle: "italic", color: "#888" },
+                    ]}
                   >
                     No number available
                   </Text>
@@ -197,6 +224,7 @@ export default function FetchContactsScreen() {
   );
 }
 
+// ... (Styles remain the same) ...
 const styles = StyleSheet.create({
   container: {
     flex: 1,

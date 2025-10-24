@@ -14,7 +14,8 @@ import {
   StyleSheet,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { launchImageLibrary } from 'react-native-image-picker';
+// MODIFIED: Import launchCamera as well
+import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import ImageResizer from '@bam.tech/react-native-image-resizer';
 import RNFS from 'react-native-fs';
 import CryptoJS from 'crypto-js';
@@ -63,25 +64,19 @@ export default function ImageTransmissionScreen() {
   const [progress, setProgress] = useState('');
   const [serverStatus, setServerStatus] = useState('Disconnected');
 
-  // --- MODIFIED: State logic ---
-  // We no longer need smsTrigger or timerFinishedTrigger
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
-  // NEW: State to hold the header from the SMS
   const [receivedSmsHeader, setReceivedSmsHeader] = useState<SmsTrigger | null>(null);
-  // NEW: State to track if the timer is done
   const [isTimerFinished, setIsTimerFinished] = useState(false);
-  // ---
 
   const ws = useRef<WebSocket | null>(null);
 
-  // --- Memoized Callbacks ---
+  // --- Callbacks ---
 
-  // MODIFIED: reconstructImageFromDemo now resets the new state
   const reconstructImageFromDemo = useCallback(async (base64: string, checksum: string, enc: number) => {
-    // Clear all triggers
+    // ... (This function remains unchanged) ...
     setPendingImage(null);
-    setReceivedSmsHeader(null); // Clear the header
-    setIsTimerFinished(false);  // Reset the timer flag
+    setReceivedSmsHeader(null);
+    setIsTimerFinished(false);
 
     setProgress('Reconstructing image...');
     await new Promise<void>((resolve) => setTimeout(() => resolve(), 1500));
@@ -114,43 +109,38 @@ export default function ImageTransmissionScreen() {
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 1000));
       setProgress('');
     }
-  }, [pass]); // Dependency: only pass
+  }, [pass]);
 
 
-  // MODIFIED: This just starts the timer and sets the header.
   const handleIncomingSmsForShow = useCallback((text: string) => {
+    // ... (This function remains unchanged) ...
     if (!text.startsWith(PROTOCOL_PREFIX)) return;
     try {
       const body = text.slice(PROTOCOL_PREFIX.length);
       const headerEnd = body.indexOf('}') + 1;
       const header: ImageHeader = JSON.parse(body.substring(0, headerEnd));
   
-      // Check if we are already processing an image
-      if (receivedSmsHeader) { // Just check if a header is already set
+      if (receivedSmsHeader) {
         console.log('Ignoring subsequent SMS for this transaction.');
         return;
       }
 
       setProgress('Receiving SMS...');
-      
       const triggerInfo = { total: header.total, checksum: header.checksum };
-      
-      // 1. Set the header from the SMS
       setReceivedSmsHeader(triggerInfo);
       
-      // 2. Start the 8-second timer
       setTimeout(() => {
-        setIsTimerFinished(true); // 3. Set the timer-finished flag
-      }, 8000); // 8-second delay
+        setIsTimerFinished(true);
+      }, 8000);
 
     } catch (e) {
       console.log('Error parsing incoming SMS', e);
     }
-  }, [receivedSmsHeader]); // Only depends on receivedSmsHeader
+  }, [receivedSmsHeader]);
 
 
-  // MODIFIED: WebSocket handler now *only* sets the pending image.
   const connectWebSocket = useCallback(() => {
+    // ... (This function remains unchanged) ...
     setServerStatus('Connecting...');
     const socket = new WebSocket(WS_URL);
 
@@ -161,8 +151,6 @@ export default function ImageTransmissionScreen() {
         const message = JSON.parse(e.data);
         if (message.type === 'NEW_IMAGE' && message.payload) {
           const { payload, checksum, enc, total } = message;
-          
-          // Just store the payload. The useEffect will handle the rest.
           setPendingImage({ payload, checksum, enc, total });
         }
       } catch (err) {
@@ -177,12 +165,12 @@ export default function ImageTransmissionScreen() {
     };
     
     ws.current = socket;
-  }, []); // No dependencies, this is stable.
+  }, []);
 
   
   // --- Effects ---
 
-  // Effect for permissions and WebSocket connection (Runs ONCE on mount)
+  // MODIFIED: Added CAMERA permission
   useEffect(() => {
     async function requestPermissions() {
       const perms = [
@@ -190,6 +178,7 @@ export default function ImageTransmissionScreen() {
         PermissionsAndroid.PERMISSIONS.RECEIVE_SMS,
         PermissionsAndroid.PERMISSIONS.READ_SMS,
         PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
+        PermissionsAndroid.PERMISSIONS.CAMERA, // Added camera permission
       ];
       await PermissionsAndroid.requestMultiple(perms);
     }
@@ -200,10 +189,11 @@ export default function ImageTransmissionScreen() {
     return () => {
         ws.current?.close();
     }
-  }, [connectWebSocket]); // Only depends on the stable connectWebSocket function
+  }, [connectWebSocket]);
 
-  // Effect for SMS listener
+  
   useEffect(() => {
+    // ... (This SMS listener effect remains unchanged) ...
     const sub = DeviceEventEmitter.addListener('SMS_IMG_RECEIVED', (payload: string) => {
       try {
         const msg = JSON.parse(payload);
@@ -216,111 +206,126 @@ export default function ImageTransmissionScreen() {
     return () => {
       sub.remove();
     };
-  }, [handleIncomingSmsForShow]); // Depends on the stable handler
+  }, [handleIncomingSmsForShow]);
 
 
-  // NEW: This effect is the "brain" of the receive logic
   useEffect(() => {
-    // We check if all three conditions are met
+    // ... (This "brain" effect remains unchanged) ...
     if (receivedSmsHeader && isTimerFinished && pendingImage) {
-      
-      // Check if the pending image from WS matches the header from SMS
       if (pendingImage.total === receivedSmsHeader.total && 
           pendingImage.checksum === receivedSmsHeader.checksum) {
-            
-        // Match! Reconstruct it.
         reconstructImageFromDemo(pendingImage.payload, pendingImage.checksum, pendingImage.enc);
-        
       } else {
-        // Mismatch. This can happen if stale data is lying around.
         console.log("Mismatch between SMS header and pending image payload.");
-        // Clear state to be safe
         setReceivedSmsHeader(null);
         setIsTimerFinished(false);
         setPendingImage(null);
       }
     }
-  }, [receivedSmsHeader, isTimerFinished, pendingImage, reconstructImageFromDemo]); // Dependencies
+  }, [receivedSmsHeader, isTimerFinished, pendingImage, reconstructImageFromDemo]);
 
   
-  // --- Pick & Send (MODIFIED) ---
-  const pickAndSend = async () => {
-    // ... (guards remain the same) ...
+  // --- Sending Logic ---
+
+  // NEW: Extracted processing logic into its own function
+  const processAndSendImage = async (imageUri: string) => {
+    try {
+      setSending(true);
+      setProgress('Resizing image...');
+
+      const resized = await ImageResizer.createResizedImage(imageUri, 400, 400, 'JPEG', 50);
+      const data = await RNFS.readFile(resized.uri, 'base64');
+      let payload = data;
+
+      if (pass) {
+        setProgress('Encrypting payload...');
+        const encrypted = CryptoJS.AES.encrypt(CryptoJS.enc.Base64.parse(data), pass).toString();
+        payload = CryptoJS.enc.Utf8.parse(encrypted).toString(CryptoJS.enc.Base64);
+      }
+
+      const checksum = CryptoJS.SHA256(payload).toString();
+      const chunks: string[] = [];
+      for (let i = 0; i < payload.length; i += CHUNK_SIZE) chunks.push(payload.slice(i, i + CHUNK_SIZE));
+      const totalChunks = chunks.length;
+
+      const proceed = await new Promise<boolean>((resolve) => {
+        Alert.alert(
+          'SMS Limit Warning',
+          `This image will be sent in ${totalChunks} SMS. Continue?`,
+          [
+            { text: 'Cancel', onPress: () => resolve(false) },
+            { text: 'Send', onPress: () => resolve(true) },
+          ],
+          { cancelable: false }
+        );
+      });
+      if (!proceed) {
+        setSending(false);
+        setProgress('');
+        return;
+      }
+
+      if (ws.current?.readyState === WebSocket.OPEN) {
+        ws.current.send(JSON.stringify({ type: 'NEW_IMAGE', payload, checksum, enc: pass ? 1 : 0, total: totalChunks }));
+      } else throw new Error('WebSocket is not connected.');
+
+      setProgress('Sending SMS');
+      const header = { id: Date.now().toString(36), total: totalChunks, checksum, enc: pass ? 1 : 0 };
+      await sendFakeSmsWithChunks(phone, header, chunks);
+
+      setProgress('All SMS parts sent!');
+      Alert.alert('Done', 'SMS parts sent successfully.');
+    } catch (e: any) {
+      Alert.alert('Error', e.message);
+    } finally {
+      setSending(false);
+      setProgress('');
+    }
+  };
+
+  // Shared validation and state reset
+  const preSendCheck = () => {
     if (!phone) {
       Alert.alert('Error', 'Please enter a recipient phone number.');
-      return;
+      return false;
     }
     if (!SmsSender) {
       Alert.alert('Native Module Error', 'SmsSender is not installed.');
-      return;
+      return false;
     }
-
-    // ***** FIX: Reset all state *immediately* on press *****
+    
+    // Reset all state *immediately*
     setReceivedImage(null);
     setPendingImage(null);
-    setReceivedSmsHeader(null); // NEW
-    setIsTimerFinished(false);   // NEW
+    setReceivedSmsHeader(null);
+    setIsTimerFinished(false);
     setProgress('');
-    // **********************************************************
+    return true;
+  };
+
+  // MODIFIED: `pickAndSend` now uses the pre-check and new processor
+  const pickAndSend = async () => {
+    if (!preSendCheck()) return;
 
     launchImageLibrary({ mediaType: 'photo' }, async (res) => {
       if (res.didCancel || !res.assets || !res.assets[0]?.uri) {
         return; // User cancelled
       }
+      // Pass the URI to the new handler
+      await processAndSendImage(res.assets[0].uri);
+    });
+  };
 
-      try {
-        setSending(true);
-        setProgress('Resizing image...');
+  // NEW: `takeAndSend` function for the camera
+  const takeAndSend = async () => {
+    if (!preSendCheck()) return;
 
-        // ... (image resizing, encryption, chunking logic remains the same) ...
-        const resized = await ImageResizer.createResizedImage(res.assets[0].uri, 400, 400, 'JPEG', 50);
-        const data = await RNFS.readFile(resized.uri, 'base64');
-        let payload = data;
-
-        if (pass) {
-          setProgress('Encrypting payload...');
-          const encrypted = CryptoJS.AES.encrypt(CryptoJS.enc.Base64.parse(data), pass).toString();
-          payload = CryptoJS.enc.Utf8.parse(encrypted).toString(CryptoJS.enc.Base64);
-        }
-
-        const checksum = CryptoJS.SHA256(payload).toString();
-        const chunks: string[] = [];
-        for (let i = 0; i < payload.length; i += CHUNK_SIZE) chunks.push(payload.slice(i, i + CHUNK_SIZE));
-        const totalChunks = chunks.length;
-
-        const proceed = await new Promise<boolean>((resolve) => {
-          Alert.alert(
-            'SMS Limit Warning',
-            `This image will be sent in ${totalChunks} SMS. Continue?`,
-            [
-              { text: 'Cancel', onPress: () => resolve(false) },
-              { text: 'Send', onPress: () => resolve(true) },
-            ],
-            { cancelable: false }
-          );
-        });
-        if (!proceed) {
-          setSending(false);
-          setProgress('');
-          return;
-        }
-
-        if (ws.current?.readyState === WebSocket.OPEN) {
-          ws.current.send(JSON.stringify({ type: 'NEW_IMAGE', payload, checksum, enc: pass ? 1 : 0, total: totalChunks }));
-        } else throw new Error('WebSocket is not connected.');
-
-        setProgress('Sending SMS');
-        const header = { id: Date.now().toString(36), total: totalChunks, checksum, enc: pass ? 1 : 0 };
-        await sendFakeSmsWithChunks(phone, header, chunks);
-
-        setProgress('All SMS parts sent!');
-        Alert.alert('Done', 'SMS parts sent successfully.');
-      } catch (e: any) {
-        Alert.alert('Error', e.message);
-      } finally {
-        setSending(false);
-        setProgress('');
+    launchCamera({ mediaType: 'photo', saveToPhotos: true }, async (res) => {
+      if (res.didCancel || !res.assets || !res.assets[0]?.uri) {
+        return; // User cancelled
       }
+      // Pass the URI to the new handler
+      await processAndSendImage(res.assets[0].uri);
     });
   };
 
@@ -375,29 +380,47 @@ export default function ImageTransmissionScreen() {
             style={styles.input}
           />
 
-          <Button title={sending ? 'Sending...' : 'Pick and Send Image'} onPress={pickAndSend} disabled={sending || !serverStatus.startsWith('Connected')} />
+          <View style={styles.buttonContainer}>
+            <Button 
+              title={sending ? 'Sending...' : 'Pick from Library'} 
+              onPress={pickAndSend} 
+              disabled={sending || !serverStatus.startsWith('Connected')} 
+            />
+            <View style={{ marginVertical: 5 }} />
+            <Button 
+              title={sending ? 'Sending...' : 'Take Photo and Send'} 
+              onPress={takeAndSend} 
+              disabled={sending || !serverStatus.startsWith('Connected')} 
+            />
+          </View>
 
+          {/* ***** FIX: Wrap the progress variable in a <Text> component ***** */}
           {progress ? <Text style={styles.progressText}>{progress}</Text> : null}
 
-          {receivedImage && (
+          {/* ***** FIX: Use a ternary to safely render the image component ***** */}
+          {receivedImage ? (
             <View style={{ marginTop: 20 }}>
               <Text style={styles.imageHeader}>🖼️ Received Image Preview</Text>
               <Image source={{ uri: receivedImage }} style={styles.image} resizeMode="contain" />
             </View>
-          )}
+          ) : null}
+          
         </ScrollView>
       </SafeAreaView>
     </SafeAreaProvider>
   );
 }
 
-// ... (Styles remain the same) ...
+// MODIFIED: Added buttonContainer style
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 20, backgroundColor: '#f5f5f5' },
   header: { fontSize: 20, fontWeight: 'bold', marginBottom: 10, textAlign: 'center' },
   statusText: { textAlign: 'center', fontSize: 14, paddingBottom: 10 },
   contactName: { fontSize: 16, fontWeight: '600', marginBottom: 10, textAlign: 'center' },
   input: { borderWidth: 1, borderColor: '#ccc', marginVertical: 10, padding: 10, borderRadius: 5 },
+  buttonContainer: {
+    marginVertical: 10,
+  },
   progressText: { marginTop: 15, fontSize: 16, textAlign: 'center', color: '#333' },
   imageHeader: { fontSize: 18, fontWeight: 'bold', textAlign: 'center' },
   image: { width: '100%', height: 300, marginTop: 10, borderRadius: 10, backgroundColor: '#eee', borderWidth: 1, borderColor: '#ddd' },

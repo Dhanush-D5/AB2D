@@ -31,7 +31,7 @@ export default function PhoneLoginScreen() {
       // Step 3: Prompt the user with a clear message.
       Alert.alert(
         "Verification Required",
-        `Please send an SMS with the code ${verificationCode} to a specific number to proceed.`
+        `Enter the OTP ${verificationCode} to proceed.`
       );
     } else {
       Alert.alert("Invalid Phone Number", "Phone number must be exactly 10 digits.");
