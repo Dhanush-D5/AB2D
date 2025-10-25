@@ -1,4 +1,3 @@
-// ImageTransmissionScreen.tsx
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View,
@@ -12,16 +11,21 @@ import {
   DeviceEventEmitter,
   NativeModules,
   StyleSheet,
+  Dimensions,
+  StatusBar,
+  Platform,
+  TouchableOpacity,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-// MODIFIED: Import launchCamera as well
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import ImageResizer from '@bam.tech/react-native-image-resizer';
 import RNFS from 'react-native-fs';
 import CryptoJS from 'crypto-js';
 import { useRoute, RouteProp } from '@react-navigation/native';
 
-// ... (Types and constants remain the same) ...
+// Get screen dimensions
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
 type RootStackParamList = {
   ImageTransmissionScreen: {
     contactId: string;
@@ -70,10 +74,7 @@ export default function ImageTransmissionScreen() {
 
   const ws = useRef<WebSocket | null>(null);
 
-  // --- Callbacks ---
-
   const reconstructImageFromDemo = useCallback(async (base64: string, checksum: string, enc: number) => {
-    // ... (This function remains unchanged) ...
     setPendingImage(null);
     setReceivedSmsHeader(null);
     setIsTimerFinished(false);
@@ -111,9 +112,7 @@ export default function ImageTransmissionScreen() {
     }
   }, [pass]);
 
-
   const handleIncomingSmsForShow = useCallback((text: string) => {
-    // ... (This function remains unchanged) ...
     if (!text.startsWith(PROTOCOL_PREFIX)) return;
     try {
       const body = text.slice(PROTOCOL_PREFIX.length);
@@ -138,9 +137,7 @@ export default function ImageTransmissionScreen() {
     }
   }, [receivedSmsHeader]);
 
-
   const connectWebSocket = useCallback(() => {
-    // ... (This function remains unchanged) ...
     setServerStatus('Connecting...');
     const socket = new WebSocket(WS_URL);
 
@@ -167,10 +164,6 @@ export default function ImageTransmissionScreen() {
     ws.current = socket;
   }, []);
 
-  
-  // --- Effects ---
-
-  // MODIFIED: Added CAMERA permission
   useEffect(() => {
     async function requestPermissions() {
       const perms = [
@@ -178,7 +171,7 @@ export default function ImageTransmissionScreen() {
         PermissionsAndroid.PERMISSIONS.RECEIVE_SMS,
         PermissionsAndroid.PERMISSIONS.READ_SMS,
         PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
-        PermissionsAndroid.PERMISSIONS.CAMERA, // Added camera permission
+        PermissionsAndroid.PERMISSIONS.CAMERA,
       ];
       await PermissionsAndroid.requestMultiple(perms);
     }
@@ -191,9 +184,7 @@ export default function ImageTransmissionScreen() {
     }
   }, [connectWebSocket]);
 
-  
   useEffect(() => {
-    // ... (This SMS listener effect remains unchanged) ...
     const sub = DeviceEventEmitter.addListener('SMS_IMG_RECEIVED', (payload: string) => {
       try {
         const msg = JSON.parse(payload);
@@ -208,9 +199,7 @@ export default function ImageTransmissionScreen() {
     };
   }, [handleIncomingSmsForShow]);
 
-
   useEffect(() => {
-    // ... (This "brain" effect remains unchanged) ...
     if (receivedSmsHeader && isTimerFinished && pendingImage) {
       if (pendingImage.total === receivedSmsHeader.total && 
           pendingImage.checksum === receivedSmsHeader.checksum) {
@@ -224,10 +213,6 @@ export default function ImageTransmissionScreen() {
     }
   }, [receivedSmsHeader, isTimerFinished, pendingImage, reconstructImageFromDemo]);
 
-  
-  // --- Sending Logic ---
-
-  // NEW: Extracted processing logic into its own function
   const processAndSendImage = async (imageUri: string) => {
     try {
       setSending(true);
@@ -283,7 +268,6 @@ export default function ImageTransmissionScreen() {
     }
   };
 
-  // Shared validation and state reset
   const preSendCheck = () => {
     if (!phone) {
       Alert.alert('Error', 'Please enter a recipient phone number.');
@@ -294,7 +278,6 @@ export default function ImageTransmissionScreen() {
       return false;
     }
     
-    // Reset all state *immediately*
     setReceivedImage(null);
     setPendingImage(null);
     setReceivedSmsHeader(null);
@@ -303,33 +286,28 @@ export default function ImageTransmissionScreen() {
     return true;
   };
 
-  // MODIFIED: `pickAndSend` now uses the pre-check and new processor
   const pickAndSend = async () => {
     if (!preSendCheck()) return;
 
     launchImageLibrary({ mediaType: 'photo' }, async (res) => {
       if (res.didCancel || !res.assets || !res.assets[0]?.uri) {
-        return; // User cancelled
+        return;
       }
-      // Pass the URI to the new handler
       await processAndSendImage(res.assets[0].uri);
     });
   };
 
-  // NEW: `takeAndSend` function for the camera
   const takeAndSend = async () => {
     if (!preSendCheck()) return;
 
     launchCamera({ mediaType: 'photo', saveToPhotos: true }, async (res) => {
       if (res.didCancel || !res.assets || !res.assets[0]?.uri) {
-        return; // User cancelled
+        return;
       }
-      // Pass the URI to the new handler
       await processAndSendImage(res.assets[0].uri);
     });
   };
 
-  // ... (sendFakeSmsWithChunks remains the same) ...
   const sendFakeSmsWithChunks = async (recipientPhone: string, header: Omit<ImageHeader, 'index'>, chunks: string[]) => {
     try {
       const messagesToSend = [];
@@ -351,15 +329,13 @@ export default function ImageTransmissionScreen() {
     }
   };
 
-
-  // --- Render ---
   return (
     <SafeAreaProvider>
       <SafeAreaView style={styles.container}>
         <ScrollView>
-          <Text style={styles.header}>📩 SMS Image App (Demo)</Text>
-          <Text style={[styles.statusText, { color: serverStatus.startsWith('Connected') ? 'green' : 'red' }]}>
-            Real Server Status: {serverStatus}
+          <Text style={styles.header}>📩 SMS Image App</Text>
+          <Text style={[styles.statusText, { color: serverStatus.startsWith('Connected') ? '#32CD32' : '#FF5459' }]}>
+            Server Status: {serverStatus}
           </Text>
 
           {route.params?.name && (
@@ -367,7 +343,8 @@ export default function ImageTransmissionScreen() {
           )}
 
           <TextInput
-            placeholder="Recipient phone (Real)"
+            placeholder="Recipient phone"
+            placeholderTextColor="#999"
             value={phone}
             onChangeText={setPhone}
             keyboardType="phone-pad"
@@ -375,31 +352,39 @@ export default function ImageTransmissionScreen() {
           />
           <TextInput
             placeholder="Passphrase (optional)"
+            placeholderTextColor="#999"
             value={pass}
             onChangeText={setPass}
+            secureTextEntry
             style={styles.input}
           />
 
           <View style={styles.buttonContainer}>
-            <Button 
-              title={sending ? 'Sending...' : 'Pick from Library'} 
+            <TouchableOpacity 
+              style={[styles.button, (!serverStatus.startsWith('Connected') || sending) && styles.buttonDisabled]}
               onPress={pickAndSend} 
-              disabled={sending || !serverStatus.startsWith('Connected')} 
-            />
-            <View style={{ marginVertical: 5 }} />
-            <Button 
-              title={sending ? 'Sending...' : 'Take Photo and Send'} 
+              disabled={sending || !serverStatus.startsWith('Connected')}
+            >
+              <Text style={styles.buttonText}>
+                {sending ? 'Sending...' : '📁 Pick from Library'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.button, (!serverStatus.startsWith('Connected') || sending) && styles.buttonDisabled]}
               onPress={takeAndSend} 
-              disabled={sending || !serverStatus.startsWith('Connected')} 
-            />
+              disabled={sending || !serverStatus.startsWith('Connected')}
+            >
+              <Text style={styles.buttonText}>
+                {sending ? 'Sending...' : '📷 Take Photo and Send'}
+              </Text>
+            </TouchableOpacity>
           </View>
 
-          {/* ***** FIX: Wrap the progress variable in a <Text> component ***** */}
           {progress ? <Text style={styles.progressText}>{progress}</Text> : null}
 
-          {/* ***** FIX: Use a ternary to safely render the image component ***** */}
           {receivedImage ? (
-            <View style={{ marginTop: 20 }}>
+            <View style={styles.imageContainer}>
               <Text style={styles.imageHeader}>🖼️ Received Image Preview</Text>
               <Image source={{ uri: receivedImage }} style={styles.image} resizeMode="contain" />
             </View>
@@ -411,17 +396,92 @@ export default function ImageTransmissionScreen() {
   );
 }
 
-// MODIFIED: Added buttonContainer style
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#f5f5f5' },
-  header: { fontSize: 20, fontWeight: 'bold', marginBottom: 10, textAlign: 'center' },
-  statusText: { textAlign: 'center', fontSize: 14, paddingBottom: 10 },
-  contactName: { fontSize: 16, fontWeight: '600', marginBottom: 10, textAlign: 'center' },
-  input: { borderWidth: 1, borderColor: '#ccc', marginVertical: 10, padding: 10, borderRadius: 5 },
-  buttonContainer: {
-    marginVertical: 10,
+  container: {
+    flex: 1,
+    backgroundColor: "#140028",
+    paddingTop: Platform.OS === 'ios' ? 50 : (StatusBar.currentHeight || 0) + 10,
+    paddingBottom: Platform.OS === 'ios' ? 20 : 10,
+    paddingHorizontal: SCREEN_WIDTH * 0.04,
   },
-  progressText: { marginTop: 15, fontSize: 16, textAlign: 'center', color: '#333' },
-  imageHeader: { fontSize: 18, fontWeight: 'bold', textAlign: 'center' },
-  image: { width: '100%', height: 300, marginTop: 10, borderRadius: 10, backgroundColor: '#eee', borderWidth: 1, borderColor: '#ddd' },
+  header: {
+    fontSize: SCREEN_WIDTH < 360 ? 22 : 24,
+    fontWeight: 'bold',
+    marginBottom: 15,
+    textAlign: 'center',
+    color: '#6a0dad',
+  },
+  statusText: {
+    textAlign: 'center',
+    fontSize: SCREEN_WIDTH < 360 ? 14 : 16,
+    paddingBottom: 15,
+    fontWeight: '600',
+  },
+  contactName: {
+    fontSize: SCREEN_WIDTH < 360 ? 16 : 18,
+    fontWeight: '600',
+    marginBottom: 15,
+    textAlign: 'center',
+    color: '#d1c4e9',
+  },
+  input: {
+    backgroundColor: "#1e1e2f",
+    borderWidth: 1,
+    borderColor: 'rgba(106, 13, 173, 0.3)',
+    marginVertical: 10,
+    padding: 14,
+    borderRadius: 14,
+    color: '#fff',
+    fontSize: SCREEN_WIDTH < 360 ? 14 : 16,
+  },
+  buttonContainer: {
+    marginVertical: 15,
+    gap: 12,
+  },
+  button: {
+    backgroundColor: '#6a0dad',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 14,
+    alignItems: 'center',
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  buttonDisabled: {
+    backgroundColor: '#4a0d7d',
+    opacity: 0.5,
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: SCREEN_WIDTH < 360 ? 16 : 18,
+    fontWeight: '700',
+  },
+  progressText: {
+    marginTop: 20,
+    fontSize: SCREEN_WIDTH < 360 ? 16 : 18,
+    textAlign: 'center',
+    color: '#d1c4e9',
+    fontWeight: '600',
+  },
+  imageContainer: {
+    marginTop: 25,
+  },
+  imageHeader: {
+    fontSize: SCREEN_WIDTH < 360 ? 18 : 20,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    color: '#6a0dad',
+    marginBottom: 15,
+  },
+  image: {
+    width: '100%',
+    height: 300,
+    borderRadius: 16,
+    backgroundColor: '#1e1e2f',
+    borderWidth: 2,
+    borderColor: 'rgba(106, 13, 173, 0.3)',
+  },
 });

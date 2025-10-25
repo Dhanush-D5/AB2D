@@ -1,5 +1,4 @@
-// FetchContactsScreen.tsx
-import React, { useEffect, useRef, useState, useCallback } from "react"; // 1. Import useCallback
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import {
   FlatList,
   StyleSheet,
@@ -10,13 +9,16 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  AppState, // 2. Import AppState
+  AppState,
+  Dimensions,
+  StatusBar,
+  Modal,
+  PermissionsAndroid,
 } from "react-native";
 import Contacts, { Contact } from "react-native-contacts";
-import { useNavigation } from "@react-navigation/native"; // We don't need useIsFocused anymore
+import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 
-// ... (RootStackParamList and other types remain the same) ...
 export type RootStackParamList = {
   FetchContacts: undefined;
   ImageTransmissionScreen: {
@@ -34,24 +36,27 @@ type FetchContactsNavProp = NativeStackNavigationProp<
 const ALPHABETS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 const cleanNumber = (num: string) => num.replace(/[^0-9+]/g, "");
 
+// Get screen dimensions
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
 export default function FetchContactsScreen() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [newContactName, setNewContactName] = useState("");
+  const [newContactPhone, setNewContactPhone] = useState("");
+  const [hasWritePermission, setHasWritePermission] = useState(false);
   const flatListRef = useRef<FlatList<Contact>>(null);
   const navigation = useNavigation<FetchContactsNavProp>();
 
-  // 3. Wrap your contact-loading logic in useCallback
-  // This ensures the function is stable and doesn't trigger unnecessary re-renders
   const loadContacts = useCallback(async () => {
     try {
       let permission = await Contacts.checkPermission();
 
-      // If we don't have permission, request it.
       if (permission !== "authorized") {
         permission = await Contacts.requestPermission();
       }
 
-      // After requesting, check the permission *again*
       if (permission === "authorized") {
         const contactsList = await Contacts.getAll();
         contactsList.sort((a, b) =>
@@ -59,13 +64,10 @@ export default function FetchContactsScreen() {
             sensitivity: "base",
           })
         );
-        // Only update state if contacts are actually found
-        // This prevents an empty list from flashing if permission was just granted
         if (contactsList.length > 0) {
           setContacts(contactsList);
         }
       } else {
-        // If permission is still not authorized (e.g., user denied)
         Alert.alert(
           "Permission Denied",
           "Cannot access contacts. Please enable it from Settings."
@@ -75,30 +77,43 @@ export default function FetchContactsScreen() {
       console.error("Contacts fetch failed:", err);
       Alert.alert("Error", "Failed to fetch contacts.");
     }
-  }, []); // Empty dependency array means this function is created once
+  }, []);
 
-  // 4. This useEffect now handles both initial load AND re-focusing the app
+  // Request all necessary permissions on mount
   useEffect(() => {
-    // Run it once on mount
+    async function requestAllPermissions() {
+      try {
+        // Request READ and WRITE permissions for contacts
+        const granted = await PermissionsAndroid.requestMultiple([
+          PermissionsAndroid.PERMISSIONS.READ_CONTACTS,
+          PermissionsAndroid.PERMISSIONS.WRITE_CONTACTS,
+        ]);
+
+        // Check if WRITE_CONTACTS permission was granted
+        const writeGranted = granted['android.permission.WRITE_CONTACTS'] === PermissionsAndroid.RESULTS.GRANTED;
+        setHasWritePermission(writeGranted);
+
+        if (!writeGranted) {
+          console.log("WRITE_CONTACTS permission denied");
+        }
+      } catch (err) {
+        console.warn("Permission request error:", err);
+      }
+    }
+
+    requestAllPermissions();
     loadContacts();
 
-    // Add an event listener for AppState changes
     const subscription = AppState.addEventListener("change", (nextAppState) => {
-      // If the app is coming back to the 'active' state (foreground)
       if (nextAppState === "active") {
-        // Run the loadContacts function again.
-        // This will re-check permission and load contacts if just granted.
         loadContacts();
       }
     });
 
-    // Cleanup: remove the listener when the component unmounts
     return () => {
       subscription.remove();
     };
-  }, [loadContacts]); // The effect depends on our stable loadContacts function
-
-  // ... (The rest of your component logic remains exactly the same) ...
+  }, [loadContacts]);
 
   const filteredContacts = contacts.filter((c) =>
     c.displayName?.toLowerCase().includes(searchQuery.toLowerCase())
@@ -140,12 +155,112 @@ export default function FetchContactsScreen() {
     });
   };
 
+  // Check permission before opening add modal
+  const handleAddContactPress = async () => {
+    // Check current permission status
+    const granted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.WRITE_CONTACTS);
+    
+    if (!granted) {
+      // Request permission
+      const result = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.WRITE_CONTACTS,
+        {
+          title: "Contacts Permission",
+          message: "This app needs permission to add contacts to your device.",
+          buttonNeutral: "Ask Me Later",
+          buttonNegative: "Cancel",
+          buttonPositive: "OK"
+        }
+      );
+
+      if (result === PermissionsAndroid.RESULTS.GRANTED) {
+        setHasWritePermission(true);
+        setShowAddModal(true);
+      } else {
+        Alert.alert(
+          "Permission Required",
+          "Write contacts permission is required to add new contacts. Please grant permission in Settings.",
+          [{ text: "OK" }]
+        );
+      }
+    } else {
+      setHasWritePermission(true);
+      setShowAddModal(true);
+    }
+  };
+
+  const handleAddContact = async () => {
+    // Validation: Name cannot be empty
+    if (!newContactName.trim()) {
+      Alert.alert("Error", "Contact name cannot be empty.");
+      return;
+    }
+
+    // Validation: Name must be at least 2 characters
+    if (newContactName.trim().length < 2) {
+      Alert.alert("Error", "Contact name must be at least 2 characters.");
+      return;
+    }
+
+    // Validation: Phone number cannot be empty
+    if (!newContactPhone.trim()) {
+      Alert.alert("Error", "Phone number cannot be empty.");
+      return;
+    }
+
+    // Validation: Phone number must be exactly 10 digits
+    const cleanedPhone = newContactPhone.replace(/[^0-9]/g, '');
+    if (cleanedPhone.length !== 10) {
+      Alert.alert("Error", "Phone number must be exactly 10 digits.");
+      return;
+    }
+
+    if (!hasWritePermission) {
+      Alert.alert("Permission Denied", "Cannot add contact without write permission.");
+      return;
+    }
+
+    try {
+      // Create contact with minimal required fields
+      const newContact = {
+        givenName: newContactName.trim(),
+        phoneNumbers: [{
+          label: 'mobile',
+          number: cleanedPhone,
+        }],
+      };
+
+      await Contacts.addContact(newContact);
+      
+      Alert.alert("Success", "Contact added successfully!");
+      setShowAddModal(false);
+      setNewContactName("");
+      setNewContactPhone("");
+      
+      // Reload contacts after a short delay
+      setTimeout(() => {
+        loadContacts();
+      }, 500);
+    } catch (err: any) {
+      console.error("Error adding contact:", err);
+      Alert.alert("Error", `Failed to add contact: ${err.message || 'Unknown error'}`);
+    }
+  };
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.select({ ios: 100, android: 80 })}
+      keyboardVerticalOffset={Platform.select({ ios: 0, android: 0 })}
     >
+      {/* Add Contact Button */}
+      <TouchableOpacity 
+        style={styles.addButton}
+        onPress={handleAddContactPress}
+      >
+        <Text style={styles.addButtonText}>➕ Add Contact</Text>
+      </TouchableOpacity>
+
       <TextInput
         placeholder="Search contacts..."
         placeholderTextColor="#999"
@@ -175,11 +290,13 @@ export default function FetchContactsScreen() {
                 onPress={() => handleContactPress(item)}
                 disabled={uniqueNumbers.length === 0}
               >
-                <Text style={styles.contactName}>{item.displayName}</Text>
+                <Text style={styles.contactName} numberOfLines={1}>
+                  {item.displayName}
+                </Text>
 
                 {uniqueNumbers.length > 0 ? (
                   uniqueNumbers.map((num, i) => (
-                    <Text key={i} style={styles.phone}>
+                    <Text key={i} style={styles.phone} numberOfLines={1}>
                       {num}
                     </Text>
                   ))
@@ -199,13 +316,14 @@ export default function FetchContactsScreen() {
           initialNumToRender={15}
           maxToRenderPerBatch={20}
           windowSize={10}
-          contentContainerStyle={{ paddingBottom: 20 }}
+          contentContainerStyle={styles.listContent}
           getItemLayout={(_, index) => ({
             length: 90,
             offset: 90 * index,
             index,
           })}
           keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         />
 
         <View style={styles.alphabetContainer}>
@@ -214,75 +332,236 @@ export default function FetchContactsScreen() {
               key={letter}
               onPress={() => scrollToLetter(letter)}
               activeOpacity={0.6}
+              style={styles.letterButton}
             >
               <Text style={styles.letter}>{letter}</Text>
             </TouchableOpacity>
           ))}
         </View>
       </View>
+
+      {/* Add Contact Modal */}
+      <Modal
+        visible={showAddModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowAddModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Add New Contact</Text>
+            
+            <TextInput
+              placeholder="Contact Name"
+              placeholderTextColor="#999"
+              style={styles.modalInput}
+              value={newContactName}
+              onChangeText={setNewContactName}
+              maxLength={50}
+            />
+            
+            <TextInput
+              placeholder="Phone Number (10 digits)"
+              placeholderTextColor="#999"
+              style={styles.modalInput}
+              value={newContactPhone}
+              onChangeText={(text) => {
+                // Only allow numbers
+                const cleaned = text.replace(/[^0-9]/g, '');
+                setNewContactPhone(cleaned);
+              }}
+              keyboardType="phone-pad"
+              maxLength={10}
+            />
+            <Text style={styles.helperText}>
+              {newContactPhone.length}/10 digits
+            </Text>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => {
+                  setShowAddModal(false);
+                  setNewContactName("");
+                  setNewContactPhone("");
+                }}
+              >
+                <Text style={styles.modalButtonText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modalButton, styles.saveButton]}
+                onPress={handleAddContact}
+              >
+                <Text style={styles.modalButtonText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
 
-// ... (Styles remain the same) ...
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#140028",
+    paddingTop: Platform.OS === 'ios' ? 50 : (StatusBar.currentHeight || 0) + 10,
+    paddingBottom: Platform.OS === 'ios' ? 20 : 10,
+    paddingHorizontal: SCREEN_WIDTH * 0.04,
+  },
+  addButton: {
+    backgroundColor: "#6a0dad",
+    paddingVertical: 12,
     paddingHorizontal: 20,
-    paddingBottom: 20,
+    borderRadius: 14,
+    marginBottom: 12,
+    alignItems: 'center',
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  addButtonText: {
+    color: "#fff",
+    fontSize: SCREEN_WIDTH < 360 ? 16 : 18,
+    fontWeight: "700",
   },
   searchInput: {
     backgroundColor: "#1e1e2f",
     width: "100%",
     color: "#fff",
     borderRadius: 14,
-    padding: 14,
-    marginBottom: 15,
-    fontSize: 18,
+    paddingHorizontal: 14,
+    paddingVertical: Platform.OS === 'ios' ? 12 : 10,
+    marginBottom: 12,
+    fontSize: SCREEN_WIDTH < 360 ? 16 : 18,
   },
   listAndSidebar: {
-    flexDirection: "row",
     flex: 1,
+    position: 'relative',
+  },
+  listContent: {
+    paddingBottom: 20,
+    paddingRight: 70,
   },
   contactCard: {
     backgroundColor: "#1e1e2f",
     width: "100%",
-    borderRadius: 20,
-    padding: 15,
-    marginVertical: 6,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginVertical: 5,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 3 },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
-    shadowRadius: 6,
+    shadowRadius: 4,
     elevation: 5,
   },
   contactName: {
-    fontSize: 22,
+    fontSize: SCREEN_WIDTH < 360 ? 18 : 20,
     fontWeight: "700",
     color: "#6a0dad",
-    marginBottom: 6,
+    marginBottom: 4,
   },
   phone: {
-    fontSize: 16,
+    fontSize: SCREEN_WIDTH < 360 ? 14 : 16,
     color: "#d1c4e9",
-    marginTop: 3,
+    marginTop: 2,
   },
   alphabetContainer: {
-    width: 50,
-    justifyContent: "flex-start",
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: 60,
+    justifyContent: "center",
     alignItems: "center",
-    marginLeft: 10,
     backgroundColor: "#000000",
-    borderRadius: 14,
-    paddingVertical: 10,
-    height: "100%",
+    borderTopLeftRadius: 20,
+    borderBottomLeftRadius: 20,
+    paddingVertical: 15,
+    paddingHorizontal: 8,
+  },
+  letterButton: {
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 26,
+    width: '100%',
   },
   letter: {
-    fontSize: 18,
+    fontSize: 14,
     color: "#6a0dad",
-    paddingVertical: 6,
-    paddingHorizontal: 8,
     fontWeight: "700",
+  },
+  // Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: '#1e1e2f',
+    borderRadius: 20,
+    padding: 25,
+    width: SCREEN_WIDTH * 0.85,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  modalTitle: {
+    fontSize: SCREEN_WIDTH < 360 ? 20 : 22,
+    fontWeight: 'bold',
+    color: '#6a0dad',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  modalInput: {
+    backgroundColor: "#140028",
+    borderWidth: 1,
+    borderColor: 'rgba(106, 13, 173, 0.3)',
+    marginTop: 10,
+    marginBottom: 5,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    color: '#fff',
+    fontSize: SCREEN_WIDTH < 360 ? 14 : 16,
+  },
+  helperText: {
+    color: '#d1c4e9',
+    fontSize: SCREEN_WIDTH < 360 ? 12 : 13,
+    marginBottom: 10,
+    marginLeft: 5,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 20,
+    gap: 10,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
+  cancelButton: {
+    backgroundColor: '#4a0d7d',
+  },
+  saveButton: {
+    backgroundColor: '#6a0dad',
+  },
+  modalButtonText: {
+    color: '#fff',
+    fontSize: SCREEN_WIDTH < 360 ? 16 : 18,
+    fontWeight: '700',
   },
 });
