@@ -1,30 +1,32 @@
-// server.js
+// bundler.js
+
+// ✅ Import the Server class directly (ESM-compatible import)
 import { WebSocketServer } from 'ws';
 
+// ✅ Create the server
 const wss = new WebSocketServer({ port: 8080 });
 
-console.log('Server started on ws://localhost:8080');
-console.log('Waiting ');
+console.log('✅ WebSocket server running at ws://localhost:8080');
 
+// ✅ Handle connections
 wss.on('connection', (ws) => {
-  console.log(`Count : ${wss.clients.size}`);
+  console.log('🟢 Client connected');
 
-  ws.on('message', (message) => {
-    console.log('📩 Message received');
+  ws.on('message', (data) => {
+    console.log('📩 Received:', data.toString());
 
-    // Broadcast the message to all other connected clients
-    wss.clients.forEach((client) => {
-      if (client !== ws && client.readyState === 1 /* WebSocket.OPEN */) {
-        client.send(message.toString());
-      }
-    });
+    try {
+      const parsed = JSON.parse(data);
+      // Echo the same payload back to all clients (broadcast)
+      wss.clients.forEach((client) => {
+        if (client.readyState === ws.OPEN) {
+          client.send(JSON.stringify(parsed));
+        }
+      });
+    } catch {
+      console.error('Invalid JSON from client');
+    }
   });
 
-  ws.on('close', () => {
-    console.log(`Count : ${wss.clients.size}`);
-  });
-
-  ws.on('error', (error) => {
-    console.error();
-  });
+  ws.on('close', () => console.log('🔴 Client disconnected'));
 });

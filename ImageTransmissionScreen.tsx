@@ -23,7 +23,6 @@ import RNFS from 'react-native-fs';
 import CryptoJS from 'crypto-js';
 import { useRoute, RouteProp } from '@react-navigation/native';
 
-// Get screen dimensions
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 type RootStackParamList = {
@@ -67,10 +66,12 @@ export default function ImageTransmissionScreen() {
   const [receivedImage, setReceivedImage] = useState<string | null>(null);
   const [progress, setProgress] = useState('');
   const [serverStatus, setServerStatus] = useState('Disconnected');
-
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
   const [receivedSmsHeader, setReceivedSmsHeader] = useState<SmsTrigger | null>(null);
   const [isTimerFinished, setIsTimerFinished] = useState(false);
+
+  // New state for modal
+  const [showModal, setShowModal] = useState(false);
 
   const ws = useRef<WebSocket | null>(null);
 
@@ -118,7 +119,7 @@ export default function ImageTransmissionScreen() {
       const body = text.slice(PROTOCOL_PREFIX.length);
       const headerEnd = body.indexOf('}') + 1;
       const header: ImageHeader = JSON.parse(body.substring(0, headerEnd));
-  
+
       if (receivedSmsHeader) {
         console.log('Ignoring subsequent SMS for this transaction.');
         return;
@@ -127,7 +128,7 @@ export default function ImageTransmissionScreen() {
       setProgress('Receiving SMS...');
       const triggerInfo = { total: header.total, checksum: header.checksum };
       setReceivedSmsHeader(triggerInfo);
-      
+
       setTimeout(() => {
         setIsTimerFinished(true);
       }, 8000);
@@ -160,7 +161,6 @@ export default function ImageTransmissionScreen() {
       setServerStatus('Disconnected. Retrying...');
       setTimeout(connectWebSocket, 3000);
     };
-    
     ws.current = socket;
   }, []);
 
@@ -175,12 +175,12 @@ export default function ImageTransmissionScreen() {
       ];
       await PermissionsAndroid.requestMultiple(perms);
     }
-    
+
     requestPermissions();
     connectWebSocket();
-    
+
     return () => {
-        ws.current?.close();
+      ws.current?.close();
     }
   }, [connectWebSocket]);
 
@@ -201,7 +201,7 @@ export default function ImageTransmissionScreen() {
 
   useEffect(() => {
     if (receivedSmsHeader && isTimerFinished && pendingImage) {
-      if (pendingImage.total === receivedSmsHeader.total && 
+      if (pendingImage.total === receivedSmsHeader.total &&
           pendingImage.checksum === receivedSmsHeader.checksum) {
         reconstructImageFromDemo(pendingImage.payload, pendingImage.checksum, pendingImage.enc);
       } else {
@@ -277,7 +277,7 @@ export default function ImageTransmissionScreen() {
       Alert.alert('Native Module Error', 'SmsSender is not installed.');
       return false;
     }
-    
+
     setReceivedImage(null);
     setPendingImage(null);
     setReceivedSmsHeader(null);
@@ -308,6 +308,20 @@ export default function ImageTransmissionScreen() {
     });
   };
 
+  // Download image
+  const handleImageDownload = async () => {
+    try {
+      const base64Data = (receivedImage || '').replace(/^data:image\/\w+;base64,/, '');
+      const downloadPath = RNFS.DownloadDirectoryPath + '/received_image_' + Date.now() + '.jpg';
+      await RNFS.writeFile(downloadPath, base64Data, 'base64');
+      Alert.alert('Download', 'Image saved to: ' + downloadPath);
+    } catch (e) {
+      const errorMessage = e instanceof Error ? e.message : 'Unknown error occurred';
+      Alert.alert('Download Failed', errorMessage);
+    }
+  };
+
+  // Send SMS chunks
   const sendFakeSmsWithChunks = async (recipientPhone: string, header: Omit<ImageHeader, 'index'>, chunks: string[]) => {
     try {
       const messagesToSend = [];
@@ -360,9 +374,9 @@ export default function ImageTransmissionScreen() {
           />
 
           <View style={styles.buttonContainer}>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.button, (!serverStatus.startsWith('Connected') || sending) && styles.buttonDisabled]}
-              onPress={pickAndSend} 
+              onPress={pickAndSend}
               disabled={sending || !serverStatus.startsWith('Connected')}
             >
               <Text style={styles.buttonText}>
@@ -370,9 +384,9 @@ export default function ImageTransmissionScreen() {
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.button, (!serverStatus.startsWith('Connected') || sending) && styles.buttonDisabled]}
-              onPress={takeAndSend} 
+              onPress={takeAndSend}
               disabled={sending || !serverStatus.startsWith('Connected')}
             >
               <Text style={styles.buttonText}>
@@ -383,13 +397,32 @@ export default function ImageTransmissionScreen() {
 
           {progress ? <Text style={styles.progressText}>{progress}</Text> : null}
 
+          {/* Image preview and modal */}
           {receivedImage ? (
-            <View style={styles.imageContainer}>
-              <Text style={styles.imageHeader}>🖼️ Received Image Preview</Text>
-              <Image source={{ uri: receivedImage }} style={styles.image} resizeMode="contain" />
-            </View>
+            <>
+              <View style={styles.imageContainer}>
+                <Text style={styles.imageHeader}>🖼️ Received Image Preview</Text>
+                <TouchableOpacity onPress={() => setShowModal(true)}>
+                  <Image source={{ uri: receivedImage }} style={styles.image} resizeMode="contain" />
+                </TouchableOpacity>
+              </View>
+
+              {showModal && (
+                <View style={styles.modalContainer}>
+                  <TouchableOpacity style={styles.modalBackdrop} onPress={() => setShowModal(false)} />
+                  <View style={styles.fullScreenImageContainer}>
+                    <Image source={{ uri: receivedImage }} style={styles.fullScreenImage} resizeMode="contain" />
+                    <TouchableOpacity style={styles.downloadButton} onPress={handleImageDownload}>
+                      <Text style={styles.downloadButtonText}>⬇ Download</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.closeButton} onPress={() => setShowModal(false)}>
+                      <Text style={styles.closeText}>✖ Close</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+            </>
           ) : null}
-          
         </ScrollView>
       </SafeAreaView>
     </SafeAreaProvider>
@@ -483,5 +516,54 @@ const styles = StyleSheet.create({
     backgroundColor: '#1e1e2f',
     borderWidth: 2,
     borderColor: 'rgba(106, 13, 173, 0.3)',
+  },
+  // Modal styles
+  modalContainer: {
+    position: 'absolute',
+    left: 0, top: 0, right: 0, bottom: 0,
+    zIndex: 99,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalBackdrop: {
+    position: 'absolute',
+    left: 0, top: 0, right: 0, bottom: 0,
+  },
+  fullScreenImageContainer: {
+    width: '98%',
+    height: '80%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullScreenImage: {
+    width: '100%',
+    height: '88%',
+    borderRadius: 18,
+    backgroundColor: '#222',
+    borderWidth: 2,
+    borderColor: '#d1c4e9',
+  },
+  downloadButton: {
+    marginTop: 10,
+    backgroundColor: '#6a0dad',
+    paddingVertical: 12,
+    paddingHorizontal: 22,
+    borderRadius: 12,
+    alignSelf: 'center',
+  },
+  downloadButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 18,
+    textAlign: 'center',
+  },
+  closeButton: {
+    marginTop: 12,
+    alignSelf: 'center',
+  },
+  closeText: {
+    color: '#d1c4e9',
+    fontSize: 20,
   },
 });
